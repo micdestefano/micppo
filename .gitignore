@@ -377,4 +377,8 @@ pyrightconfig.json
 *tmpfiles
 *lol
 
+# Additional names to ignore
+runs
+videos
+
 # End of https://www.toptal.com/developers/gitignore/api/python,intellij,jupyternotebooks,test

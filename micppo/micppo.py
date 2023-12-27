@@ -96,6 +96,10 @@ def parse_args() -> argparse.Namespace:
                         help="The gym environemnt ID to use. Default: %(default)s")
     parser.add_argument("--learning-rate", type=float, default=2.5e-4,
                         help="The learning rate of the optimizer. Default: %(default)s")
+    parser.add_argument("--min-learning-rate-ratio", type=float, default=0.1,
+                        help="The minimum learning rate ratio. When using learning rate annealing, the minimum learning"
+                             " rate is computed as min_learning_rate_ratio * learning_rate, and it it reached at the"
+                             " last update. Default: %(default)s")
     parser.add_argument("--seed", type=int, default=1,
                         help="Seed of the experiment. Default: %(default)s")
     parser.add_argument("--total-timesteps", type=int, default=25000,
@@ -191,14 +195,16 @@ def main() -> None:
     next_obs = torch.Tensor(envs.reset()[0]).to(device)
     # Initial termination conditions (all false)
     next_done = torch.zeros(args.num_envs).to(device)
-    num_updates = args.total_timesteps // args.batch_size
+    # The following is a division with ceiling, so I ensure at least total_timesteps are performed
+    num_updates = -(args.total_timesteps // -args.batch_size)
 
     anneal_lr = not args.no_lr_annealing
 
+    lr_anneal_frac = (1 - args.min_learning_rate_ratio) / (num_updates - 1) if anneal_lr else 0.0
+
     # Training loop
     for update in range(1, num_updates + 1):
-        frac = 1.0 - (update - 1.0) / num_updates if anneal_lr else 1.0
-        cur_lr = frac * args.learning_rate
+        cur_lr = args.learning_rate * (1.0 - lr_anneal_frac * (update - 1.0))
         optimizer.param_groups[0]["lr"] = cur_lr
 
         # Run a whole rollout: we interact with the environment by using our agent for num_steps
