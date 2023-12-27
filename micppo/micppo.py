@@ -11,6 +11,7 @@ import torch.optim as optim
 from collections.abc import Callable
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+from typing import Literal
 
 
 def make_env_generator(
@@ -30,7 +31,7 @@ def make_env_generator(
         )
         if activate_render:
             env = gym.wrappers.RecordVideo(
-                env, video_folder="videos", name_prefix=run_name, episode_trigger=lambda n: n % 100 == 0
+                env, video_folder=f"videos/{run_name}", name_prefix=run_name, episode_trigger=lambda n: n % 100 == 0
             )
         return env
 
@@ -39,20 +40,38 @@ def make_env_generator(
 
 class Agent(nn.Module):
 
-    def __init__(self, envs: gym.vector.VectorEnv, hidden_size: int = 64, num_hidden_layers: int = 1):
+    __activations = {
+        "relu": nn.ReLU,
+        "tanh": nn.Tanh,
+        "elu": nn.ELU,
+        "leaky-relu": nn.LeakyReLU
+    }
+
+    @staticmethod
+    def supported_activations() -> list[str]:
+        return list(Agent.__activations.keys())
+
+    def __init__(
+            self,
+            envs: gym.vector.VectorEnv,
+            hidden_size: int = 64,
+            num_hidden_layers: int = 1,
+            activation: Literal["relu", "tanh", "elu", "leaky-relu"] = "tanh"
+    ):
         super().__init__()
         total_num_features_in = np.prod(envs.single_observation_space.shape)
+        activ = self.__activations[activation]
         # NOTE: The critic must return the value of an observation (the value of a state)
         self.critic = nn.Sequential(
             self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
-            nn.Tanh(),
-            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers),
+            activ(),
+            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers, activ),
             self.__layer_init(nn.Linear(hidden_size, 1), std=1.0)
         )
         self.actor = nn.Sequential(
             self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
-            nn.Tanh(),
-            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers),
+            activ(),
+            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers, activ),
             # NOTE: The very small std on this output layer ensures that output layer parameters all have
             # similar scalar values (because the random number cannot vary too much with a small std) and
             # as a result, the probability of taking each action will be similar (at least at the beginning
@@ -68,12 +87,12 @@ class Agent(nn.Module):
         return layer
 
     @staticmethod
-    def __create_ppo_hidden_layers(hidden_size: int, num_hidden_layers: int) -> nn.Sequential:
+    def __create_ppo_hidden_layers(hidden_size: int, num_hidden_layers: int, activ: nn.Module) -> nn.Sequential:
         result = nn.Sequential(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
         num_hidden_layers -= 1
         for _ in range(num_hidden_layers):
             result.append(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)))
-            result.append(nn.Tanh())
+            result.append(activ())
         return result
 
     def get_value(self, observation: torch.Tensor) -> torch.Tensor:
@@ -121,6 +140,9 @@ def parse_args() -> argparse.Namespace:
                         help="The size of NN hidden layers (both for the actor and the critic). Default: %(default)s")
     parser.add_argument("--num-hidden-layers", type=int, default=1,
                         help="The number of NN hidden layers (both for the actor and the critic). Default: %(default)s")
+    parser.add_argument("--activation", type=str, choices=Agent.supported_activations(), default="tanh",
+                        help="The activation function used into the neural network (both for the actor and the critic)."
+                             " Default: %(default)s")
 
     # Algorithm specific arguments
     parser.add_argument("--num-envs", type=int, default=4,
@@ -189,7 +211,12 @@ def main() -> None:
     seed_list = [args.seed + i for i in range(args.num_envs)]
     obs_batch, _ = envs.reset(seed=seed_list)
 
-    agent = Agent(envs=envs, hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers).to(device)
+    agent = Agent(
+        envs=envs,
+        hidden_size=args.hidden_size,
+        num_hidden_layers=args.num_hidden_layers,
+        activation=args.activation
+    ).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1.e-5)
 
     # ALGO LOGIC: Storage setup
