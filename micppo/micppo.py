@@ -39,35 +39,42 @@ def make_env_generator(
 
 class Agent(nn.Module):
 
-    def __init__(self, envs: gym.vector.VectorEnv):
+    def __init__(self, envs: gym.vector.VectorEnv, hidden_size: int = 64, num_hidden_layers: int = 1):
         super().__init__()
         total_num_features_in = np.prod(envs.single_observation_space.shape)
         # NOTE: The critic must return the value of an observation (the value of a state)
         self.critic = nn.Sequential(
-            self.__layer_init(nn.Linear(total_num_features_in, 64)),
+            self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
             nn.Tanh(),
-            self.__layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            self.__layer_init(nn.Linear(64, 1), std=1.0)
+            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers),
+            self.__layer_init(nn.Linear(hidden_size, 1), std=1.0)
         )
         self.actor = nn.Sequential(
-            self.__layer_init(nn.Linear(total_num_features_in, 64)),
+            self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
             nn.Tanh(),
-            self.__layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers),
             # NOTE: The very small std on this output layer ensures that output layer parameters all have
             # similar scalar values (because the random number cannot vary too much with a small std) and
             # as a result, the probability of taking each action will be similar (at least at the beginning
             # of the training)
-            self.__layer_init(nn.Linear(64, envs.single_action_space.n), std=0.01)
+            self.__layer_init(nn.Linear(hidden_size, envs.single_action_space.n), std=0.01)
         )
 
     # NOTE: Layer initialization strategy typical of the PPO implementation
     @staticmethod
-    def __layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0):
+    def __layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
         torch.nn.init.orthogonal_(layer.weight, std)
         torch.nn.init.constant_(layer.bias, bias_const)
         return layer
+
+    @staticmethod
+    def __create_ppo_hidden_layers(hidden_size: int, num_hidden_layers: int) -> nn.Sequential:
+        result = nn.Sequential(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
+        num_hidden_layers -= 1
+        for _ in range(num_hidden_layers):
+            result.append(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)))
+            result.append(nn.Tanh())
+        return result
 
     def get_value(self, observation: torch.Tensor) -> torch.Tensor:
         return self.critic(observation)
@@ -110,6 +117,10 @@ def parse_args() -> argparse.Namespace:
                         help="When provided, uses CPU instead of the GPU")
     parser.add_argument("--capture-video", action="store_true",
                         help="When provided, activates capturing video recording of the agent behavior.")
+    parser.add_argument("--hidden-size", type=int, default=64,
+                        help="The size of NN hidden layers (both for the actor and the critic). Default: %(default)s")
+    parser.add_argument("--num-hidden-layers", type=int, default=1,
+                        help="The number of NN hidden layers (both for the actor and the critic). Default: %(default)s")
 
     # Algorithm specific arguments
     parser.add_argument("--num-envs", type=int, default=4,
@@ -178,7 +189,7 @@ def main() -> None:
     seed_list = [args.seed + i for i in range(args.num_envs)]
     obs_batch, _ = envs.reset(seed=seed_list)
 
-    agent = Agent(envs=envs).to(device)
+    agent = Agent(envs=envs, hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1.e-5)
 
     # ALGO LOGIC: Storage setup
