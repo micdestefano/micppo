@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "micppo"
+version = "0.1.0"
+description = "Implementation of Proximal Policy Optimization (PPO) following the tutorial by Costa Huang (https://www.youtube.com/watch?v=MEt6rrxH8W4)"
+authors = ["Michele De Stefano <--->"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+gymnasium = "^0.29.1"
+torch = "^2.1.2"
+stable-baselines3 = "^2.2.1"
+tensorboard = "^2.15.1"
+wandb = "^0.16.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+coverage = "^7.3.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
