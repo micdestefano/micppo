@@ -98,7 +98,7 @@ class Agent(nn.Module):
 
     @staticmethod
     def __create_ppo_hidden_layers(hidden_size: int, num_hidden_layers: int, activ: nn.Module) -> nn.Sequential:
-        result = nn.Sequential(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
+        result = nn.Sequential(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)), activ())
         num_hidden_layers -= 1
         for _ in range(num_hidden_layers):
             result.append(Agent.__layer_init(nn.Linear(hidden_size, hidden_size)))
