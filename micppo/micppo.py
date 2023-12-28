@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 from typing import Literal
@@ -53,30 +53,39 @@ class Agent(nn.Module):
 
     def __init__(
             self,
-            envs: gym.vector.VectorEnv,
+            num_obs_features: int,
+            num_actions: int,
             hidden_size: int = 64,
             num_hidden_layers: int = 1,
             activation: Literal["relu", "tanh", "elu", "leaky-relu"] = "tanh"
     ):
+        """
+        Constructor.
+
+        :param num_obs_features:    The number of observed features.
+        :param num_actions:         The number of possible actions.
+        :param hidden_size:         The number of neurons for each hidden layer.
+        :param num_hidden_layers:   The total number of hidden layers.
+        :param activation:          The activation function to be used.
+        """
         super().__init__()
-        total_num_features_in = np.prod(envs.single_observation_space.shape)
         activ = self.__activations[activation]
         # NOTE: The critic must return the value of an observation (the value of a state)
         self.critic = nn.Sequential(
-            self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
+            self.__layer_init(nn.Linear(num_obs_features, hidden_size)),
             activ(),
             self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers, activ),
             self.__layer_init(nn.Linear(hidden_size, 1), std=1.0)
         )
         self.actor = nn.Sequential(
-            self.__layer_init(nn.Linear(total_num_features_in, hidden_size)),
+            self.__layer_init(nn.Linear(num_obs_features, hidden_size)),
             activ(),
             self.__create_ppo_hidden_layers(hidden_size, num_hidden_layers, activ),
             # NOTE: The very small std on this output layer ensures that output layer parameters all have
             # similar scalar values (because the random number cannot vary too much with a small std) and
             # as a result, the probability of taking each action will be similar (at least at the beginning
             # of the training)
-            self.__layer_init(nn.Linear(hidden_size, envs.single_action_space.n), std=0.01)
+            self.__layer_init(nn.Linear(hidden_size, num_actions), std=0.01)
         )
 
     # NOTE: Layer initialization strategy typical of the PPO implementation
@@ -95,22 +104,53 @@ class Agent(nn.Module):
             result.append(activ())
         return result
 
+    def _get_action_probs(self, observation: torch.Tensor) -> Categorical:
+        logits = self.actor(observation)
+        probs = Categorical(logits=logits)
+        return probs
+
     def get_value(self, observation: torch.Tensor) -> torch.Tensor:
+        """
+        Computes an estimate of the value associated to the observed state.
+
+        :param observation: The parameters describing the observed state.
+
+        :return: An estimate of the value of the current state.
+        """
         return self.critic(observation)
+
+    def get_action(self, observation: torch.Tensor) -> torch.Tensor:
+        """
+        Samples an action to be taken given an observed state.
+
+        :param observation: The parameters describing the observed state.
+
+        :return: The action chosen by the policy.
+        """
+        probs = self._get_action_probs(observation)
+        return probs.sample()
 
     def get_action_and_value(
             self,
             observation: torch.Tensor,
             action: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits = self.actor(observation)
-        probs = Categorical(logits=logits)
+        """
+        Provides action and value estimates given an observed state.
+
+        :param observation: The parameters describing the observed state.
+        :param action: The action chosen by the policy, given the observed state passed with observation.
+                       If None, the action is sampled by using the policy.
+
+        :return: The tuple (action, log(P[action]), cur. policy entropy, value)
+        """
+        probs = self._get_action_probs(observation)
         if action is None:
             action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.get_value(observation)
 
 
-def parse_args() -> argparse.Namespace:
+def _parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="A Proximal Policy Optimization implementation, following the tutorial by Costa Huang "
                     "(https://www.youtube.com/watch?v=MEt6rrxH8W4)",
@@ -143,6 +183,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--activation", type=str, choices=Agent.supported_activations(), default="tanh",
                         help="The activation function used into the neural network (both for the actor and the critic)."
                              " Default: %(default)s")
+    parser.add_argument("--num-checkpoints", type=int, default=4,
+                        help="Approximate number of agent checkpoints to save. Default: %(default)s")
 
     # Algorithm specific arguments
     parser.add_argument("--num-envs", type=int, default=4,
@@ -178,20 +220,34 @@ def parse_args() -> argparse.Namespace:
                         help="A target KL-divergence threshold. When provided, it enables early-stopping if the"
                              " threshold is exceeded. If you want to use it, a good value is 0.015.")
 
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(args)
     arguments.batch_size = int(arguments.num_envs * arguments.num_steps)
     arguments.minibatch_size = int(arguments.batch_size // arguments.num_minibatches)
     return arguments
 
 
-def main() -> None:
-    args = parse_args()
+def train(args: Sequence[str] | None = None) -> tuple[Agent, dict]:
+    """
+    Trains an agent to solve the problem provided by a Gymnasium environment.
+
+    :param args: A list of string corresponding to the command-line parameters provided to the main script.
+                 If None, then the arguments are parsed directly from the command line. This parameter
+                 allows us to train the agent programmatically, without calling the script from the command
+                 line.
+
+    :return: A tuple containing, in sequence, the trained agent and the hyperparameters.
+    """
+    args = _parse_args(args)
     print(args)
     run_name = f"{args.gym_id}_{args.exp_name}_{args.seed}_{int(time.time())}"
+    checkpoint_dir = f"model_checkpoints/{run_name}"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    # CONTINUARE DA QUI! BISOGNA SALVARE I CHECKPOINTS DEL MODELLO
     writer = SummaryWriter(f"runs/{run_name}")
+    hyperparams = vars(args)
     writer.add_text(
         "hyperparameters",
-        "|param|value|\n|-|-|\n{}".format("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()]))
+        "|param|value|\n|-|-|\n{}".format("\n".join([f"|{key}|{value}|" for key, value in hyperparams.items()]))
     )
 
     random.seed(args.seed)
@@ -212,7 +268,8 @@ def main() -> None:
     obs_batch, _ = envs.reset(seed=seed_list)
 
     agent = Agent(
-        envs=envs,
+        num_obs_features=np.prod(envs.single_observation_space.shape),
+        num_actions=envs.single_action_space.n,
         hidden_size=args.hidden_size,
         num_hidden_layers=args.num_hidden_layers,
         activation=args.activation
@@ -235,6 +292,8 @@ def main() -> None:
     next_done = torch.zeros(args.num_envs).to(device)
     # The following is a division with ceiling, so I ensure at least total_timesteps are performed
     num_updates = -(args.total_timesteps // -args.batch_size)
+    # Checkpoint interval
+    checkpoint_interval = -(num_updates // -args.num_checkpoints)
 
     anneal_lr = not args.no_lr_annealing
 
@@ -435,6 +494,8 @@ def main() -> None:
     envs.close()
     writer.close()
 
+    return agent, hyperparams
+
 
 if __name__ == "__main__":
-    main()
+    train()
