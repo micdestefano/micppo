@@ -1,5 +1,6 @@
 import argparse
 import gymnasium as gym
+import json
 import numpy as np
 import os
 import random
@@ -242,13 +243,16 @@ def train(args: Sequence[str] | None = None) -> tuple[Agent, dict]:
     run_name = f"{args.gym_id}_{args.exp_name}_{args.seed}_{int(time.time())}"
     checkpoint_dir = f"model_checkpoints/{run_name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
-    # CONTINUARE DA QUI! BISOGNA SALVARE I CHECKPOINTS DEL MODELLO
     writer = SummaryWriter(f"runs/{run_name}")
     hyperparams = vars(args)
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n{}".format("\n".join([f"|{key}|{value}|" for key, value in hyperparams.items()]))
     )
+
+    file_name = os.path.join(checkpoint_dir, f"{run_name}-hyperpars.json")
+    with open(file_name, mode="w") as f:
+        json.dump(hyperparams, f)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -491,8 +495,16 @@ def train(args: Sequence[str] | None = None) -> tuple[Agent, dict]:
         print(f"Steps per second: {steps_per_second}")
         writer.add_scalar("charts/steps_per_second", steps_per_second, global_step)
 
+        if update % checkpoint_interval == 0:
+            file_name = os.path.join(checkpoint_dir, f"{run_name}-update-{update}.pt")
+            torch.save(agent.state_dict(), file_name)
+
     envs.close()
     writer.close()
+
+    # NOTE: Always save the final model
+    file_name = os.path.join(checkpoint_dir, f"{run_name}-update-{num_updates}.pt")
+    torch.save(agent.state_dict(), file_name)
 
     return agent, hyperparams
 
